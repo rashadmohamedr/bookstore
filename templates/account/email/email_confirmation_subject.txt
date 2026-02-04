@@ -1,0 +1,4 @@
+{% load i18n %}
+{% autoescape off %} #protects against security issues like cross site scripting
+{% blocktrans %}Please Confirm Your E-mail Address{% endblocktrans %} 
+{% endautoescape %}
