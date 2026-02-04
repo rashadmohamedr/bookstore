@@ -1,14 +1,13 @@
-from django.contrib import admin
+﻿from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
 
 from .forms import CustomUserChangeForm, CustomUserCreationForm
-# Register your models here.
 
-CustomUser=get_user_model()
+CustomUser = get_user_model()
 
 class CustomUserAdmin(UserAdmin):
-    add_form =  CustomUserCreationForm
+    add_form = CustomUserCreationForm
     form = CustomUserChangeForm
     model = CustomUser
     list_display = [
@@ -16,5 +15,16 @@ class CustomUserAdmin(UserAdmin):
         "username",
         "is_superuser",
     ]
+    add_fieldsets = (
+        (None, {
+            "classes": ("wide",),
+            "fields": (
+                "email",
+                "username",
+                "password1",
+                "password2",
+            ),
+        }),
+    ) # TODO: need to be fixed / changed
 
-admin.site.register(CustomUser,CustomUserAdmin)
+admin.site.register(CustomUser, CustomUserAdmin)
