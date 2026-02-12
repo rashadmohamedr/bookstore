@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 class Book(models.Model):
     id = models.UUIDField(
         primary_key=True,
+        db_index=True,
         default=uuid.uuid4,
         editable=False
     )
@@ -16,6 +17,9 @@ class Book(models.Model):
     price = models.DecimalField(max_digits=6, decimal_places=2)
     cover = models.ImageField(upload_to="covers/",blank=True)
     class Meta: 
+        indexes = [
+            models.Index( fields=["id"],name="id_index" )
+        ]
         permissions = [
         ("special_status", "Can read all books"),
         ]
