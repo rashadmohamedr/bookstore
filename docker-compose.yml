@@ -1,4 +1,3 @@
-version: "3.13"
 services:
   web:
     build: .
@@ -10,8 +9,9 @@ services:
     depends_on:
     - db
     environment:
-      - "DJANGO_SECRET_KEY=django-insecure-qu+jyxpz5xz_v18h7y-vc1sem=26m9a^ocu5q%af-l2%3b&#&&"
+      - "DJANGO_SECRET_KEY=xExNq6ttvNqHKg844UVG2jqdNdC1c9276nE_xoEtVGVOmgn58sU"
       - "DJANGO_DEBUG=False"
+      - "DJANGO_SECURE_SSL_REDIRECT=True"
   db:
     image: postgres:15
     volumes:
