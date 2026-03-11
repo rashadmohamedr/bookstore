@@ -39,3 +39,8 @@ class Review(models.Model):
     def __str__(self):
         return self.review
     
+class Cart(models.Model):
+    user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
+    books = models.ManyToManyField(Book, related_name="carts")
+    def __str__(self):
+        return f"Cart of {self.user.username}"
