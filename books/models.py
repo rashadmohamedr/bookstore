@@ -40,7 +40,45 @@ class Review(models.Model):
         return self.review
     
 class Cart(models.Model):
-    user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
-    books = models.ManyToManyField(Book, related_name="carts")
+    user = models.OneToOneField(
+        get_user_model(),
+        on_delete=models.CASCADE,
+        related_name="cart",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
     def __str__(self):
         return f"Cart of {self.user.username}"
+
+    @property
+    def total(self):
+        from decimal import Decimal
+        return sum(
+            (item.subtotal for item in self.items.select_related("book")),
+            Decimal("0.00"),
+        )
+
+    @property
+    def total_quantity(self):
+        return sum(item.quantity for item in self.items.all())
+
+
+class CartItem(models.Model):
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
+    book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    quantity = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["cart", "book"], name="unique_cart_book")
+        ]
+
+    def __str__(self):
+        return f"{self.quantity}x {self.book.title}"
+
+    @property
+    def subtotal(self):
+        from decimal import Decimal
+        price = Decimal(str(self.book.price))
+        return price * self.quantity
