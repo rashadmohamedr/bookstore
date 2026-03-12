@@ -1,11 +1,12 @@
 ﻿from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
-from django.test import TestCase
+from django.test import TestCase, RequestFactory
 from django.urls import reverse, reverse_lazy
 from decimal import Decimal
 from allauth.account.models import EmailAddress
-from .models import Book, Review
-from .forms import ReviewForm
+from .models import Book, Review, Cart, CartItem
+from .forms import ReviewForm, AddToCartForm, UpdateCartItemForm, RemoveFromCartForm
+from . import cart_service
 
 
 # ============================================
@@ -535,3 +536,338 @@ class SearchIntegrationTests(TestCase):
         """Test search finds partial matches"""
         response = self.client.get(reverse("search_results") + "?q=Djang")
         self.assertContains(response, "Django Web Development")
+
+
+# ============================================
+# CART TESTS
+# ============================================
+
+class CartModelUnitTests(TestCase):
+    """Unit tests for Cart and CartItem models."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="cartuser",
+            email="cart@example.com",
+            password="testpass123",
+        )
+        self.book = Book.objects.create(
+            title="Cart Test Book",
+            author="Cart Author",
+            price="20.00",
+        )
+
+    def test_cart_creation(self):
+        """Cart is created with a OneToOne user relationship."""
+        cart = Cart.objects.create(user=self.user)
+        self.assertEqual(str(cart), f"Cart of {self.user.username}")
+
+    def test_cart_is_unique_per_user(self):
+        """Only one cart per user – second create raises IntegrityError."""
+        from django.db import IntegrityError
+        Cart.objects.create(user=self.user)
+        with self.assertRaises(IntegrityError):
+            Cart.objects.create(user=self.user)
+
+    def test_cartitem_creation(self):
+        """CartItem is created and subtotal is computed correctly."""
+        cart = Cart.objects.create(user=self.user)
+        item = CartItem.objects.create(cart=cart, book=self.book, quantity=2)
+        self.assertEqual(item.quantity, 2)
+        self.assertEqual(item.subtotal, Decimal("40.00"))
+        self.assertEqual(str(item), f"2x {self.book.title}")
+
+    def test_unique_cart_book_constraint(self):
+        """Cannot add the same book to the same cart twice."""
+        from django.db import IntegrityError
+        cart = Cart.objects.create(user=self.user)
+        CartItem.objects.create(cart=cart, book=self.book, quantity=1)
+        with self.assertRaises(IntegrityError):
+            CartItem.objects.create(cart=cart, book=self.book, quantity=1)
+
+    def test_cart_total_quantity(self):
+        """Cart.total_quantity sums all item quantities."""
+        book2 = Book.objects.create(title="B2", author="A", price="10.00")
+        cart = Cart.objects.create(user=self.user)
+        CartItem.objects.create(cart=cart, book=self.book, quantity=3)
+        CartItem.objects.create(cart=cart, book=book2, quantity=2)
+        self.assertEqual(cart.total_quantity, 5)
+
+    def test_cart_total_price(self):
+        """Cart.total returns correct Decimal sum."""
+        book2 = Book.objects.create(title="B2", author="A", price="10.00")
+        cart = Cart.objects.create(user=self.user)
+        CartItem.objects.create(cart=cart, book=self.book, quantity=1)  # 20.00
+        CartItem.objects.create(cart=cart, book=book2, quantity=3)      # 30.00
+        self.assertEqual(cart.total, Decimal("50.00"))
+
+    def test_deleting_cart_cascades_to_items(self):
+        """Deleting a cart removes its CartItems."""
+        cart = Cart.objects.create(user=self.user)
+        CartItem.objects.create(cart=cart, book=self.book, quantity=1)
+        cart_id = cart.id
+        cart.delete()
+        self.assertFalse(CartItem.objects.filter(cart_id=cart_id).exists())
+
+
+class CartServiceUserTests(TestCase):
+    """Unit tests for cart_service with authenticated users."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="svcuser",
+            email="svc@example.com",
+            password="testpass123",
+        )
+        self.book = Book.objects.create(
+            title="Service Book",
+            author="Author",
+            price="15.00",
+        )
+        self.client.force_login(self.user)
+
+    def test_add_to_cart_creates_item(self):
+        response = self.client.post(
+            reverse("cart_add"),
+            {"book_id": str(self.book.pk), "quantity": 2},
+        )
+        self.assertRedirects(response, reverse("cart"))
+        cart = Cart.objects.get(user=self.user)
+        item = CartItem.objects.get(cart=cart, book=self.book)
+        self.assertEqual(item.quantity, 2)
+
+    def test_add_to_cart_twice_increments_quantity(self):
+        """Adding the same book twice increments rather than duplicating."""
+        self.client.post(
+            reverse("cart_add"),
+            {"book_id": str(self.book.pk), "quantity": 1},
+        )
+        self.client.post(
+            reverse("cart_add"),
+            {"book_id": str(self.book.pk), "quantity": 3},
+        )
+        item = CartItem.objects.get(cart__user=self.user, book=self.book)
+        self.assertEqual(item.quantity, 4)
+
+    def test_update_cart_item(self):
+        self.client.post(
+            reverse("cart_add"),
+            {"book_id": str(self.book.pk), "quantity": 1},
+        )
+        self.client.post(
+            reverse("cart_update"),
+            {"book_id": str(self.book.pk), "quantity": 5},
+        )
+        item = CartItem.objects.get(cart__user=self.user, book=self.book)
+        self.assertEqual(item.quantity, 5)
+
+    def test_remove_from_cart(self):
+        self.client.post(
+            reverse("cart_add"),
+            {"book_id": str(self.book.pk), "quantity": 1},
+        )
+        self.client.post(
+            reverse("cart_remove"),
+            {"book_id": str(self.book.pk)},
+        )
+        self.assertFalse(
+            CartItem.objects.filter(cart__user=self.user, book=self.book).exists()
+        )
+
+    def test_clear_cart(self):
+        book2 = Book.objects.create(title="B2", author="A", price="5.00")
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 1}
+        )
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(book2.pk), "quantity": 2}
+        )
+        self.client.post(reverse("cart_clear"))
+        self.assertEqual(CartItem.objects.filter(cart__user=self.user).count(), 0)
+
+    def test_cart_view_shows_items_and_total(self):
+        self.client.post(
+            reverse("cart_add"),
+            {"book_id": str(self.book.pk), "quantity": 2},
+        )
+        response = self.client.get(reverse("cart"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Service Book")
+        self.assertContains(response, "30.00")  # 2 * 15.00
+
+    def test_cart_view_empty_state(self):
+        response = self.client.get(reverse("cart"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Your cart is empty")
+
+    def test_cart_mutation_endpoints_reject_get(self):
+        """Add/update/remove/clear endpoints redirect on GET."""
+        for url_name in ("cart_add", "cart_update", "cart_remove", "cart_clear"):
+            response = self.client.get(reverse(url_name))
+            self.assertRedirects(response, reverse("cart"), msg_prefix=url_name)
+
+
+class CartServiceGuestTests(TestCase):
+    """Unit tests for cart_service with anonymous (guest) users."""
+
+    def setUp(self):
+        self.book = Book.objects.create(
+            title="Guest Book",
+            author="Guest Author",
+            price="10.00",
+        )
+
+    def test_guest_add_to_cart_stored_in_session(self):
+        response = self.client.post(
+            reverse("cart_add"),
+            {"book_id": str(self.book.pk), "quantity": 3},
+        )
+        self.assertRedirects(response, reverse("cart"))
+        session = self.client.session
+        self.assertEqual(session["guest_cart"].get(str(self.book.pk)), 3)
+
+    def test_guest_add_twice_increments(self):
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 1}
+        )
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 2}
+        )
+        self.assertEqual(
+            self.client.session["guest_cart"].get(str(self.book.pk)), 3
+        )
+
+    def test_guest_cart_count_in_context(self):
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 4}
+        )
+        response = self.client.get(reverse("cart"))
+        self.assertEqual(response.context["cart_count"], 4)
+
+    def test_guest_cart_view_shows_items(self):
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 2}
+        )
+        response = self.client.get(reverse("cart"))
+        self.assertContains(response, "Guest Book")
+        self.assertContains(response, "20.00")  # 2 * 10.00
+
+    def test_guest_remove_from_cart(self):
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 1}
+        )
+        self.client.post(
+            reverse("cart_remove"), {"book_id": str(self.book.pk)}
+        )
+        self.assertNotIn(
+            str(self.book.pk),
+            self.client.session.get("guest_cart", {}),
+        )
+
+
+class CartMergeTests(TestCase):
+    """Integration tests for guest-cart merge on login."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="mergeuser",
+            email="merge@example.com",
+            password="testpass123",
+        )
+        EmailAddress.objects.create(
+            user=self.user,
+            email=self.user.email,
+            verified=True,
+            primary=True,
+        )
+        self.book = Book.objects.create(
+            title="Merge Book",
+            author="Author",
+            price="25.00",
+        )
+
+    def test_session_cart_merged_on_login(self):
+        """Guest cart is merged into user cart after login."""
+        # Guest adds book
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 2}
+        )
+        self.assertEqual(
+            self.client.session.get("guest_cart", {}).get(str(self.book.pk)), 2
+        )
+
+        # Guest logs in via force_login (triggers user_logged_in signal)
+        self.client.force_login(self.user)
+
+        # Session cart should be cleared
+        self.assertNotIn("guest_cart", self.client.session)
+
+        # User's DB cart should have the item
+        self.assertTrue(
+            CartItem.objects.filter(
+                cart__user=self.user, book=self.book, quantity=2
+            ).exists()
+        )
+
+    def test_merge_increments_existing_user_cart_item(self):
+        """Merging guest cart with existing DB item increments quantity."""
+        # Pre-populate user's DB cart
+        cart = Cart.objects.create(user=self.user)
+        CartItem.objects.create(cart=cart, book=self.book, quantity=1)
+
+        # Guest adds same book (2)
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 2}
+        )
+
+        # Login – triggers merge
+        self.client.force_login(self.user)
+
+        item = CartItem.objects.get(cart__user=self.user, book=self.book)
+        self.assertEqual(item.quantity, 3)
+
+    def test_session_cart_cleared_after_merge(self):
+        """Session guest_cart key is removed after merge."""
+        self.client.post(
+            reverse("cart_add"), {"book_id": str(self.book.pk), "quantity": 1}
+        )
+        self.client.force_login(self.user)
+        self.assertNotIn("guest_cart", self.client.session)
+
+
+class CartFormUnitTests(TestCase):
+    """Unit tests for cart-related forms."""
+
+    def setUp(self):
+        self.book = Book.objects.create(
+            title="Form Book", author="Author", price="9.99"
+        )
+
+    def test_add_to_cart_form_valid(self):
+        form = AddToCartForm(
+            data={"book_id": str(self.book.pk), "quantity": 2}
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_add_to_cart_form_invalid_quantity(self):
+        form = AddToCartForm(
+            data={"book_id": str(self.book.pk), "quantity": 0}
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("quantity", form.errors)
+
+    def test_add_to_cart_form_quantity_too_high(self):
+        form = AddToCartForm(
+            data={"book_id": str(self.book.pk), "quantity": 100}
+        )
+        self.assertFalse(form.is_valid())
+
+    def test_remove_from_cart_form_valid(self):
+        form = RemoveFromCartForm(data={"book_id": str(self.book.pk)})
+        self.assertTrue(form.is_valid())
+
+    def test_update_cart_item_form_valid(self):
+        form = UpdateCartItemForm(
+            data={"book_id": str(self.book.pk), "quantity": 5}
+        )
+        self.assertTrue(form.is_valid())

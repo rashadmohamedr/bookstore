@@ -36,6 +36,14 @@
                         <a class="nav-link" href="{% url 'account_signup' %}">Sign Up</a>
                     </li>
                     {% endif %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'cart' %}">
+                            🛒 Cart
+                            {% if cart_count %}
+                            <span class="badge bg-warning text-dark">{{ cart_count }}</span>
+                            {% endif %}
+                        </a>
+                    </li>
                 </ul>
                 <form class="d-flex" action="{% url 'search_results' %}" method="get">
                     <input class="form-control me-2" type="search" name="q" placeholder="Search" aria-\

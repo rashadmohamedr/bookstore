@@ -1,0 +1,60 @@
+{% extends "_base.html" %}
+{% block title %}Your Cart{% endblock title %}
+{% block content %}
+<h1 class="mt-4">Your Cart</h1>
+
+{% if cart_items %}
+<table class="table table-striped mt-3">
+    <thead>
+        <tr>
+            <th>Book</th>
+            <th>Price</th>
+            <th>Quantity</th>
+            <th>Subtotal</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in cart_items %}
+        <tr>
+            <td><a href="{{ item.book.get_absolute_url }}">{{ item.book.title }}</a></td>
+            <td>${{ item.book.price }}</td>
+            <td>
+                <form method="post" action="{% url 'cart_update' %}" class="d-flex align-items-center gap-1">
+                    {% csrf_token %}
+                    <input type="hidden" name="book_id" value="{{ item.book.pk }}">
+                    <input type="number" name="quantity" value="{{ item.quantity }}" min="1" max="99"
+                           class="form-control form-control-sm" style="width:70px">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">Update</button>
+                </form>
+            </td>
+            <td>${{ item.subtotal }}</td>
+            <td>
+                <form method="post" action="{% url 'cart_remove' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="book_id" value="{{ item.book.pk }}">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr>
+            <td colspan="3" class="text-end fw-bold">Total</td>
+            <td class="fw-bold">${{ cart_total }}</td>
+            <td></td>
+        </tr>
+    </tfoot>
+</table>
+
+<form method="post" action="{% url 'cart_clear' %}" class="mt-2">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-outline-danger btn-sm"
+            onclick="return confirm('Clear your entire cart?')">Clear Cart</button>
+</form>
+
+{% else %}
+<p class="mt-3">Your cart is empty. <a href="{% url 'book_list' %}">Browse books</a></p>
+{% endif %}
+{% endblock content %}
